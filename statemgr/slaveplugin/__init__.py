@@ -1,1 +1,1 @@
-from .demoslave import *
+from .slaveplugin import *
