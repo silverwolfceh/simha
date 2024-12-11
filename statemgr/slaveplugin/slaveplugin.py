@@ -18,5 +18,5 @@ class slave_process(threading.Thread):
     def run(self):
         while self.running:
             logger.debug("Slave is running...")
-            time.sleep(1)
+            time.sleep(5)
         logger.debug("Slave is stopped")

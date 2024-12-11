@@ -30,7 +30,7 @@ class threadbased(threading.Thread):
 
     def awarable_sleep(self, sleep_time, wakeup_interval = 0.2, exit_condition = None, exit_params = None):
         cnt = 0
-        if wakeup_interval <= 0.1:
+        if wakeup_interval < 0.1:
             logger.error("Wake up interval is not correct, fall back to 0.2")
             wakeup_interval = 0.2
         waittime_new = (sleep_time*int(1/wakeup_interval))
@@ -64,8 +64,9 @@ class connmgr(threadbased):
     def wait_non_blocking(self, msgtype : Message):
         try:
             message, addr = self.socket.recvfrom(1024)
+            logger.debug(f"Receiving...{message}")
             data = deserialize_msg(message)
-            if data["msg"] == msgtype:
+            if data["msg"] == msgtype.value:
                 return True, data
             return False, None
         except BlockingIOError:
@@ -80,6 +81,18 @@ class connmgr(threadbased):
     def wait_ping(self, timeout = 5):
         return self.awarable_sleep(timeout, 0.2, self.wait_non_blocking, Message.PING)
 
+    def wait_and_collect_elects_message(self, maxwait = 5):
+        rxdata = []
+        while True:
+            ret, data = self.awarable_sleep(maxwait, 0.1, self.wait_non_blocking, Message.ELECT_S)
+            if ret:
+                rxdata.append(data)
+                continue
+            else:
+                break
+        print(rxdata)
+        return rxdata
+    
     def wait_elects_message(self):
         return self.awarable_sleep(2, 0.2, self.wait_non_blocking, Message.ELECT_S)
 
@@ -87,11 +100,11 @@ class connmgr(threadbased):
         self.socket.bind(("0.0.0.0", self.clusterid))
 
     def run(self):
-        self.rxthr.start()
+        # self.rxthr.start()
         while self.running:
             self.awarable_sleep(5)
-        self.rxthr.stop()
-        self.rxthr.join()
+        # self.rxthr.stop()
+        # self.rxthr.join()
 
 class activereceiver(threadbased):
     def __init__(self, rxsocket, cbhandles = {}):
@@ -136,13 +149,17 @@ class pingmgr(threadbased):
         super().__init__()
         self.myrole = myrole
         self.conn = conn
-        self.slaveinterval = 60
+        self.slaveinterval = sleepinterval.SLAVE
         self.masterinterval = 1
         self.masterdeadcb = master_dead_cb
         self.msg = create_msg(conn.myid, conn.clusterid, Message.PING)
 
-    def update_role(self, newrole):
-        self.myrole = newrole
+    def change_to_master(self):
+        logger.info("MYROLE is MASTER")
+        self.myrole = role.MASTER
+
+    def change_to_slave(self):
+        self.myrole = role.SLAVE
 
     def sleep_by_role(self):
         cnt = 0
@@ -151,11 +168,12 @@ class pingmgr(threadbased):
                 time.sleep(1)
                 cnt = cnt + 1
             elif self.myrole is role.MASTER:
-                cnt = 0
-                time.sleep(1)
+                time.sleep(0.1)
+                break
             elif self.myrole is role.UNDEF:
                 # System is still finding the master, ping manager should sleep and wait
-                time.sleep(1)
+                time.sleep(0.1)
+                break
             else:
                 logger.critical("The role is not existed")
                 return
@@ -167,24 +185,25 @@ class pingmgr(threadbased):
     def run(self):
         while self.running:
             if self.myrole is role.MASTER:
+                logger.debug("Waiting ping")
                 ret, data = self.conn.wait_ping()
                 if ret:
                     logger.info("Receive ping request from slaves")
-                    msg = create_msg(self.conn.myid, self.conn.clusterid, Message.PONG)
+                    msg = create_msg(self.conn.myid, self.conn.clusterid, Message.PONG, 0)
                     logger.info("Send pong")
                     self.conn.send_broadcast(msg)
-                # self.sleep_by_role()
+                self.sleep_by_role()
             elif self.myrole is role.SLAVE:
-                msg = create_msg(self.conn.myid, self.conn.clusterid, Message.PING)
+                logger.debug("Sending ping")
+                msg = create_msg(self.conn.myid, self.conn.clusterid, Message.PING, 0)
                 self.conn.send_broadcast(msg)
                 ret, data = self.conn.wait_pong()
                 if not ret:
                     logger.error("Failed to received from master")
                     logger.info("Callback to notify the master is dead")
                     # Master is dead, what should we do
-                    self.masterdeadcb()
                     self.myrole = role.UNDEF
-                    logger.info("Waiting for role update from manager")
-                    self.sleep_by_role()
-                else:
-                    self.sleep_by_role()
+                    self.masterdeadcb()
+                self.sleep_by_role()
+            else:
+                self.sleep_by_role()

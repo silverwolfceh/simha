@@ -41,7 +41,6 @@ class statemgrprog(threading.Thread):
         self.conmgr = connmgr(myid, clusterid)
         self.pingmgr = pingmgr(self.conmgr, self.master_is_dead)
         self.mweight = int(myweight)
-        self.otherweight = []
         self.rolemgr = rolemanager()
         self.role = role.SLAVE
         self.running = True
@@ -54,28 +53,20 @@ class statemgrprog(threading.Thread):
         msg = self.conmgr.create_msg_wrapper(Message.ELECT_S, self.mweight)
         self.conmgr.send_broadcast(msg)
         logger.info("Received weight from other nodes")
-        cnt = 0
-        logger.warn("Coming into critical session")
-        self.otherweight.append(msg)
-        while cnt < self.maxnodes:
-            ret, data = self.conmgr.wait_elects_message()
-            if ret:
-                if data["from"] != self.myid:
-                    self.otherweight.append(data)
-            cnt = cnt + 1
-        new_master = self.myid
-        max_weight = self.mweight
-        print(self.otherweight)
-        for d in self.otherweight:
-            if d["weight"] > max_weight:
-                new_master = int(d["from"])
-                max_weight = int(d["weight"])
-        if new_master != self.myid:
+        electsdata = self.conmgr.wait_and_collect_elects_message()
+        print(f"All election data: {electsdata}")
+        ret = amithewinner(self.myid, electsdata, random_election)
+        if not ret:
             msg = self.conmgr.create_msg_wrapper(Message.ELECT_E_L, self.mweight)
+            self.conmgr.send_broadcast(msg)
+            self.role = role.SLAVE
+            self.pingmgr.change_to_slave()
         else:
             msg = self.conmgr.create_msg_wrapper(Message.ELECT_E_W, self.mweight)
+            self.conmgr.send_broadcast(msg)
             self.role = role.MASTER
             self.isroleupdate = True
+            self.pingmgr.change_to_master()
 
     def stop(self):
         self.running = False

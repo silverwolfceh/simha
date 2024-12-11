@@ -13,10 +13,10 @@ class master_process(threading.Thread):
         return self.processid
     
     def stop(self):
-        pass
+        self.running = False
 
     def run(self):
         while self.running:
             logger.debug("Master is running...")
-            time.sleep(1)
+            time.sleep(5)
         logger.debug("Master is stopped")
